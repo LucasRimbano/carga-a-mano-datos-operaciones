@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import matplotlib.pyplot as plt
-from openpyxl.drawing.image import Image
+
 
 
 archivo = "operaciones_crypto2.xlsx"
@@ -153,11 +153,47 @@ def crear_grafico_pnl_por_moneda(compras, ventas):
 
     return nombre_grafico
 
+
+
 def guardar_datos(compras, ventas):
     operaciones_abiertas = compras[compras["Estado"] == "ABIERTA"].copy()
+
     operaciones_cerradas = compras[compras["Estado"] == "CERRADA"].copy()
+
+    if not operaciones_cerradas.empty and not ventas.empty:
+        ventas_para_cerradas = ventas[[
+            "ID compra",
+            "Dólares vendidos",
+            "Precio venta",
+            "Costo proporcional",
+            "PNL realizado"
+        ]].copy()
+
+        operaciones_cerradas = operaciones_cerradas.merge(
+            ventas_para_cerradas,
+            left_on="ID",
+            right_on="ID compra",
+            how="left"
+        )
+
+        operaciones_cerradas = operaciones_cerradas[[
+            "ID",
+            "Nombre",
+            "Fecha de compra",
+            "Dólares comprados",
+            "Dólares vendidos",
+            "Precio de compra",
+            "Precio venta",
+            "Cantidad comprada",
+            "Cantidad vendida total",
+            "Cantidad restante",
+            "Costo proporcional",
+            "PNL realizado",
+            "Estado"
+        ]]
+
     resumen_por_moneda = crear_resumen_por_moneda(compras, ventas)
-    grafico_pnl_por_moneda = crear_grafico_pnl_por_moneda(compras, ventas)
+    crear_grafico_pnl_por_moneda(compras, ventas)
 
     with pd.ExcelWriter(archivo, engine="openpyxl") as writer:
         compras.to_excel(writer, sheet_name="Compras", index=False)
@@ -166,10 +202,6 @@ def guardar_datos(compras, ventas):
         operaciones_cerradas.to_excel(writer, sheet_name="Operaciones cerradas", index=False)
         resumen_por_moneda.to_excel(writer, sheet_name="Resumen por moneda", index=False)
 
-        if grafico_pnl_por_moneda is not None:
-            hoja_grafico = writer.book.create_sheet("Gráfico PNL por moneda")
-            imagen = Image(grafico_pnl_por_moneda)
-            hoja_grafico.add_image(imagen, "B2")
 
 def convertir_columnas_compras(compras):
     columnas_float = [
