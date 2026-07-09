@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 
 archivo = "operaciones_crypto2.xlsx"
+TOLERANCIA_CIERRE_CANTIDAD = 0.01
 
 columnas_compras = [
     "ID",
@@ -29,6 +30,22 @@ columnas_ventas = [
     "Dólares vendidos",
     "Costo proporcional",
     "PNL realizado"
+]
+
+columnas_historial = [
+    "Fecha registro",
+    "Tipo movimiento",
+    "ID compra",
+    "ID venta",
+    "Nombre",
+    "Fecha operacion",
+    "Cantidad",
+    "Precio",
+    "Dolares",
+    "Costo proporcional",
+    "PNL realizado",
+    "Estado",
+    "Detalle"
 ]
 
 
@@ -56,20 +73,113 @@ def pedir_numero(mensaje):
             print("Ejemplo: 1600")
             print("Ejemplo con decimal: 0.0637\n")
 
+def cerrar_diferencias_minimas(compras):
+    if compras.empty:
+        return compras
+
+    diferencia_por_total_vendido = (
+        compras["Cantidad comprada"] - compras["Cantidad vendida total"]
+    )
+
+    cerrar_por_diferencia_minima = (
+        (compras["Estado"] == "ABIERTA") &
+        (compras["Cantidad vendida total"] > 0) &
+        (
+            (compras["Cantidad restante"].abs() <= TOLERANCIA_CIERRE_CANTIDAD) |
+            (diferencia_por_total_vendido.abs() <= TOLERANCIA_CIERRE_CANTIDAD)
+        )
+    )
+
+    compras.loc[cerrar_por_diferencia_minima, "Cantidad restante"] = 0.0
+    compras.loc[cerrar_por_diferencia_minima, "Cantidad vendida total"] = compras.loc[
+        cerrar_por_diferencia_minima,
+        "Cantidad comprada"
+    ]
+    compras.loc[cerrar_por_diferencia_minima, "Estado"] = "CERRADA"
+
+    return compras
+
+def agregar_historial(historial, tipo_movimiento, id_compra="", id_venta="",
+                      nombre="", fecha_operacion="", cantidad="", precio="",
+                      dolares="", costo_proporcional="", pnl_realizado="",
+                      estado="", detalle=""):
+    nuevo_movimiento = {
+        "Fecha registro": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+        "Tipo movimiento": tipo_movimiento,
+        "ID compra": id_compra,
+        "ID venta": id_venta,
+        "Nombre": nombre,
+        "Fecha operacion": fecha_operacion,
+        "Cantidad": cantidad,
+        "Precio": precio,
+        "Dolares": dolares,
+        "Costo proporcional": costo_proporcional,
+        "PNL realizado": pnl_realizado,
+        "Estado": estado,
+        "Detalle": detalle
+    }
+
+    return pd.concat([historial, pd.DataFrame([nuevo_movimiento])], ignore_index=True)
+
+def crear_historial_inicial(compras, ventas):
+    historial = pd.DataFrame(columns=columnas_historial)
+
+    for _, compra in compras.iterrows():
+        historial = agregar_historial(
+            historial,
+            "IMPORTACION_COMPRA",
+            id_compra=compra["ID"],
+            nombre=compra["Nombre"],
+            fecha_operacion=compra["Fecha de compra"],
+            cantidad=compra["Cantidad comprada"],
+            precio=compra["Precio de compra"],
+            dolares=compra["Dólares comprados"],
+            estado=compra["Estado"],
+            detalle="Compra existente antes de crear historial"
+        )
+
+    for _, venta in ventas.iterrows():
+        historial = agregar_historial(
+            historial,
+            "IMPORTACION_VENTA",
+            id_compra=venta["ID compra"],
+            id_venta=venta["ID venta"],
+            nombre=venta["Nombre"],
+            fecha_operacion=venta["Fecha venta"],
+            cantidad=venta["Cantidad vendida"],
+            precio=venta["Precio venta"],
+            dolares=venta["Dólares vendidos"],
+            costo_proporcional=venta["Costo proporcional"],
+            pnl_realizado=venta["PNL realizado"],
+            detalle="Venta existente antes de crear historial"
+        )
+
+    return historial
+
 def cargar_datos():
     if os.path.exists(archivo):
         compras = pd.read_excel(archivo, sheet_name="Compras")
         ventas = pd.read_excel(archivo, sheet_name="Ventas")
 
+        try:
+            historial = pd.read_excel(archivo, sheet_name="Historial")
+        except ValueError:
+            historial = pd.DataFrame(columns=columnas_historial)
+
         compras = convertir_columnas_compras(compras)
         ventas = convertir_columnas_ventas(ventas)
+        compras = cerrar_diferencias_minimas(compras)
 
-        return compras, ventas
+        if historial.empty:
+            historial = crear_historial_inicial(compras, ventas)
+
+        return compras, ventas, historial
 
     compras = pd.DataFrame(columns=columnas_compras)
     ventas = pd.DataFrame(columns=columnas_ventas)
+    historial = pd.DataFrame(columns=columnas_historial)
 
-    return compras, ventas
+    return compras, ventas, historial
 
 def crear_resumen_por_moneda(compras, ventas):
     resumen = []
@@ -154,8 +264,200 @@ def crear_grafico_pnl_por_moneda(compras, ventas):
     return nombre_grafico
 
 
+def crear_resumen_trades_cerrados(compras, ventas):
+    columnas = [
+        "ID compra",
+        "Nombre",
+        "PNL realizado",
+        "Resultado",
+        "Diferencia contra promedio"
+    ]
 
-def guardar_datos(compras, ventas):
+    if compras.empty or ventas.empty:
+        return pd.DataFrame(columns=columnas)
+
+    operaciones_cerradas = compras[compras["Estado"] == "CERRADA"].copy()
+
+    if operaciones_cerradas.empty:
+        return pd.DataFrame(columns=columnas)
+
+    ids_cerradas = operaciones_cerradas["ID"].tolist()
+    ventas_cerradas = ventas[ventas["ID compra"].isin(ids_cerradas)].copy()
+
+    if ventas_cerradas.empty:
+        return pd.DataFrame(columns=columnas)
+
+    trades = ventas_cerradas.groupby(["ID compra", "Nombre"], as_index=False)["PNL realizado"].sum()
+    promedio = trades["PNL realizado"].mean()
+    mejor_indice = trades["PNL realizado"].idxmax()
+    peor_indice = trades["PNL realizado"].idxmin()
+
+    trades["Resultado"] = "NORMAL"
+    if mejor_indice == peor_indice:
+        trades.loc[mejor_indice, "Resultado"] = "MEJOR Y PEOR TRADE"
+    else:
+        trades.loc[mejor_indice, "Resultado"] = "MEJOR TRADE"
+        trades.loc[peor_indice, "Resultado"] = "PEOR TRADE"
+    trades["Diferencia contra promedio"] = trades["PNL realizado"] - promedio
+
+    return trades.sort_values("PNL realizado", ascending=False)
+
+
+def crear_grafico_trades_cerrados(compras, ventas):
+    trades = crear_resumen_trades_cerrados(compras, ventas)
+
+    if trades.empty:
+        return None
+
+    trades_ordenados = trades.sort_values("PNL realizado", ascending=True).copy()
+    promedio = trades_ordenados["PNL realizado"].mean()
+    mejor_trade = trades_ordenados.loc[trades_ordenados["PNL realizado"].idxmax()]
+    peor_trade = trades_ordenados.loc[trades_ordenados["PNL realizado"].idxmin()]
+
+    etiquetas = trades_ordenados.apply(
+        lambda fila: f"ID {int(fila['ID compra'])} - {fila['Nombre']}",
+        axis=1
+    )
+    colores = [
+        "#2e7d32" if pnl >= 0 else "#c62828"
+        for pnl in trades_ordenados["PNL realizado"]
+    ]
+
+    fig, (ax_barras, ax_boxplot) = plt.subplots(
+        1,
+        2,
+        figsize=(13, 6),
+        gridspec_kw={"width_ratios": [3, 1]}
+    )
+
+    ax_barras.barh(etiquetas, trades_ordenados["PNL realizado"], color=colores)
+    ax_barras.axvline(0, color="black", linewidth=0.8)
+    ax_barras.axvline(promedio, color="#1565c0", linestyle="--", linewidth=1.5, label=f"Promedio: {promedio:.2f}")
+    ax_barras.set_title("PNL por trade cerrado")
+    ax_barras.set_xlabel("PNL realizado en USD")
+    ax_barras.legend()
+
+    resumen = (
+        f"Mejor: ID {int(mejor_trade['ID compra'])} {mejor_trade['Nombre']} "
+        f"({mejor_trade['PNL realizado']:.2f})\n"
+        f"Peor: ID {int(peor_trade['ID compra'])} {peor_trade['Nombre']} "
+        f"({peor_trade['PNL realizado']:.2f})\n"
+        f"Promedio: {promedio:.2f}"
+    )
+    ax_barras.text(
+        0.02,
+        0.98,
+        resumen,
+        transform=ax_barras.transAxes,
+        va="top",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.85}
+    )
+
+    ax_boxplot.boxplot(
+        trades_ordenados["PNL realizado"],
+        vert=True,
+        patch_artist=True,
+        boxprops={"facecolor": "#d8e8f8"},
+        medianprops={"color": "#0d47a1", "linewidth": 2}
+    )
+    ax_boxplot.scatter(
+        [1] * len(trades_ordenados),
+        trades_ordenados["PNL realizado"],
+        color=colores,
+        alpha=0.75
+    )
+    ax_boxplot.axhline(promedio, color="#1565c0", linestyle="--", linewidth=1.5)
+    ax_boxplot.set_title("Distribucion")
+    ax_boxplot.set_ylabel("PNL realizado en USD")
+    ax_boxplot.set_xticks([])
+
+    fig.suptitle("Mejor, peor y promedio de trades cerrados")
+    fig.tight_layout()
+
+    nombre_grafico = "grafico_pnl_trades_cerrados.png"
+    plt.savefig(nombre_grafico)
+    plt.close()
+
+    return nombre_grafico
+
+
+def crear_grafico_boxplot_general_trades(compras, ventas):
+    trades = crear_resumen_trades_cerrados(compras, ventas)
+
+    if trades.empty:
+        return None, None
+
+    pnl = trades["PNL realizado"]
+    promedio = pnl.mean()
+    mediana = pnl.median()
+    q1 = pnl.quantile(0.25)
+    q3 = pnl.quantile(0.75)
+    mejor_trade = trades.loc[pnl.idxmax()]
+    peor_trade = trades.loc[pnl.idxmin()]
+
+    estadisticas = {
+        "Cantidad trades": len(trades),
+        "Mejor trade": mejor_trade,
+        "Peor trade": peor_trade,
+        "Promedio": promedio,
+        "Mediana": mediana,
+        "Q1": q1,
+        "Q3": q3,
+        "Minimo": pnl.min(),
+        "Maximo": pnl.max()
+    }
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.boxplot(
+        pnl,
+        vert=True,
+        patch_artist=True,
+        boxprops={"facecolor": "#d8e8f8"},
+        medianprops={"color": "#0d47a1", "linewidth": 2},
+        whiskerprops={"color": "#455a64"},
+        capprops={"color": "#455a64"}
+    )
+    ax.scatter([1] * len(trades), pnl, color="#2e7d32", alpha=0.75)
+    ax.axhline(promedio, color="#1565c0", linestyle="--", linewidth=1.5, label=f"Promedio: {promedio:.2f}")
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_title("Boxplot general de PNL por trade cerrado")
+    ax.set_ylabel("PNL realizado en USD")
+    ax.set_xticks([])
+    ax.legend()
+
+    resumen = (
+        f"Trades: {len(trades)}\n"
+        f"Mejor: ID {int(mejor_trade['ID compra'])} {mejor_trade['Nombre']} ({mejor_trade['PNL realizado']:.2f})\n"
+        f"Peor: ID {int(peor_trade['ID compra'])} {peor_trade['Nombre']} ({peor_trade['PNL realizado']:.2f})\n"
+        f"Promedio: {promedio:.2f}\n"
+        f"Mediana: {mediana:.2f}\n"
+        f"Q1: {q1:.2f} | Q3: {q3:.2f}"
+    )
+    ax.text(
+        0.03,
+        0.97,
+        resumen,
+        transform=ax.transAxes,
+        va="top",
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9}
+    )
+
+    fig.tight_layout()
+
+    nombre_grafico = "grafico_boxplot_general_trades.png"
+    plt.savefig(nombre_grafico)
+    plt.close()
+
+    return nombre_grafico, estadisticas
+
+
+
+def guardar_datos(compras, ventas, historial=None):
+    compras = cerrar_diferencias_minimas(compras)
+
+    if historial is None:
+        historial = pd.DataFrame(columns=columnas_historial)
+
     operaciones_abiertas = compras[compras["Estado"] == "ABIERTA"].copy()
 
     operaciones_cerradas = compras[compras["Estado"] == "CERRADA"].copy()
@@ -193,7 +495,9 @@ def guardar_datos(compras, ventas):
         ]]
 
     resumen_por_moneda = crear_resumen_por_moneda(compras, ventas)
-    crear_grafico_pnl_por_moneda(compras, ventas)
+    resumen_trades_cerrados = crear_resumen_trades_cerrados(compras, ventas)
+    grafico_pnl_por_moneda = crear_grafico_pnl_por_moneda(compras, ventas)
+    grafico_trades_cerrados = crear_grafico_trades_cerrados(compras, ventas)
 
     with pd.ExcelWriter(archivo, engine="openpyxl") as writer:
         compras.to_excel(writer, sheet_name="Compras", index=False)
@@ -201,6 +505,10 @@ def guardar_datos(compras, ventas):
         operaciones_abiertas.to_excel(writer, sheet_name="Operaciones abiertas", index=False)
         operaciones_cerradas.to_excel(writer, sheet_name="Operaciones cerradas", index=False)
         resumen_por_moneda.to_excel(writer, sheet_name="Resumen por moneda", index=False)
+        resumen_trades_cerrados.to_excel(writer, sheet_name="Resumen trades cerrados", index=False)
+        historial.to_excel(writer, sheet_name="Historial", index=False)
+
+    return grafico_pnl_por_moneda, grafico_trades_cerrados
 
 
 def convertir_columnas_compras(compras):
@@ -239,7 +547,7 @@ def convertir_columnas_ventas(ventas):
     return ventas
 
 
-def registrar_compra(compras, ventas):
+def registrar_compra(compras, ventas, historial):
     print("\n--- Registrar compra ---")
 
     nombre = input("Nombre de la crypto: ")
@@ -268,14 +576,26 @@ def registrar_compra(compras, ventas):
     }
 
     compras = pd.concat([compras, pd.DataFrame([nueva_compra])], ignore_index=True)
+    historial = agregar_historial(
+        historial,
+        "COMPRA",
+        id_compra=nuevo_id,
+        nombre=nombre,
+        fecha_operacion=fecha_compra,
+        cantidad=cantidad_comprada,
+        precio=precio_compra,
+        dolares=dolares_comprados,
+        estado="ABIERTA",
+        detalle="Compra registrada"
+    )
 
-    guardar_datos(compras, ventas)
+    guardar_datos(compras, ventas, historial)
 
     print("\nCompra registrada correctamente.")
     print(f"ID de la operación: {nuevo_id}")
     print(f"Cantidad comprada: {cantidad_comprada}")
 
-    return compras, ventas
+    return compras, ventas, historial
 
 
 def mostrar_operaciones_abiertas(compras):
@@ -298,14 +618,14 @@ def mostrar_operaciones_abiertas(compras):
 
 
 
-def registrar_venta(compras, ventas):
+def registrar_venta(compras, ventas, historial):
     print("\n--- Registrar venta ---")
 
     abiertas = compras[compras["Estado"] == "ABIERTA"]
 
     if abiertas.empty:
         print("\nNo tenés operaciones abiertas para vender.")
-        return compras, ventas
+        return compras, ventas, historial
 
     mostrar_operaciones_abiertas(compras)
 
@@ -315,13 +635,13 @@ def registrar_venta(compras, ventas):
 
     if len(indice) == 0:
         print("\nNo existe una operación con ese ID.")
-        return compras, ventas
+        return compras, ventas, historial
 
     indice = indice[0]
 
     if compras.loc[indice, "Estado"] != "ABIERTA":
         print("\nEsa operación ya está cerrada.")
-        return compras, ventas
+        return compras, ventas, historial
 
     nombre = compras.loc[indice, "Nombre"]
     cantidad_restante = float(compras.loc[indice, "Cantidad restante"])
@@ -348,13 +668,13 @@ def registrar_venta(compras, ventas):
 
     else:
         print("\nOpción inválida.")
-        return compras, ventas
+        return compras, ventas, historial
 
     precio_venta = pedir_numero("Precio de venta: ")
 
     if cantidad_vendida > cantidad_restante:
         print("\nError: no podés vender más de lo que tenés disponible.")
-        return compras, ventas
+        return compras, ventas, historial
 
     dolares_vendidos = cantidad_vendida * precio_venta
 
@@ -379,15 +699,16 @@ def registrar_venta(compras, ventas):
 
     if confirmar.lower() != "s":
         print("\nVenta cancelada. No se guardó nada.")
-        return compras, ventas
+        return compras, ventas, historial
 
     cantidad_vendida_total_anterior = float(compras.loc[indice, "Cantidad vendida total"])
     nueva_cantidad_vendida_total = cantidad_vendida_total_anterior + cantidad_vendida
 
     compras.loc[indice, "Cantidad vendida total"] = nueva_cantidad_vendida_total
 
-    if nueva_cantidad_restante <= 0.00000001:
+    if nueva_cantidad_restante <= TOLERANCIA_CIERRE_CANTIDAD:
         nueva_cantidad_restante = 0.0
+        compras.loc[indice, "Cantidad vendida total"] = cantidad_comprada
         compras.loc[indice, "Cantidad restante"] = 0.0
         compras.loc[indice, "Estado"] = "CERRADA"
     else:
@@ -411,8 +732,24 @@ def registrar_venta(compras, ventas):
     }
 
     ventas = pd.concat([ventas, pd.DataFrame([nueva_venta])], ignore_index=True)
+    estado_despues_venta = compras.loc[indice, "Estado"]
+    historial = agregar_historial(
+        historial,
+        "VENTA",
+        id_compra=id_operacion,
+        id_venta=nuevo_id_venta,
+        nombre=nombre,
+        fecha_operacion=fecha_venta,
+        cantidad=cantidad_vendida,
+        precio=precio_venta,
+        dolares=dolares_vendidos,
+        costo_proporcional=costo_proporcional,
+        pnl_realizado=pnl_realizado,
+        estado=estado_despues_venta,
+        detalle=f"Venta registrada. Cantidad restante: {nueva_cantidad_restante}"
+    )
 
-    guardar_datos(compras, ventas)
+    guardar_datos(compras, ventas, historial)
 
     print("\nVenta registrada correctamente.")
     print(f"Dólares vendidos: {dolares_vendidos}")
@@ -420,14 +757,14 @@ def registrar_venta(compras, ventas):
     print(f"PNL realizado: {pnl_realizado}")
     print(f"Cantidad restante: {nueva_cantidad_restante}")
 
-    return compras, ventas
+    return compras, ventas, historial
 
-def eliminar_compra_por_id(compras, ventas):
+def eliminar_compra_por_id(compras, ventas, historial):
     print("\n--- Eliminar compra por ID ---")
 
     if compras.empty:
         print("\nNo hay compras cargadas.")
-        return compras, ventas
+        return compras, ventas, historial
 
     print("\n--- Compras cargadas ---")
 
@@ -447,7 +784,7 @@ def eliminar_compra_por_id(compras, ventas):
 
     if not existe_compra:
         print("\nNo existe una compra con ese ID.")
-        return compras, ventas
+        return compras, ventas, historial
 
     compra_a_eliminar = compras[compras["ID"] == id_compra].iloc[0]
 
@@ -469,17 +806,30 @@ def eliminar_compra_por_id(compras, ventas):
 
     if confirmar.lower() != "s":
         print("\nEliminación cancelada. No se borró nada.")
-        return compras, ventas
+        return compras, ventas, historial
+
+    historial = agregar_historial(
+        historial,
+        "ELIMINACION_COMPRA",
+        id_compra=id_compra,
+        nombre=compra_a_eliminar["Nombre"],
+        fecha_operacion=compra_a_eliminar["Fecha de compra"],
+        cantidad=compra_a_eliminar["Cantidad comprada"],
+        precio=compra_a_eliminar["Precio de compra"],
+        dolares=compra_a_eliminar["Dólares comprados"],
+        estado=compra_a_eliminar["Estado"],
+        detalle=f"Compra eliminada con {len(ventas_relacionadas)} venta/s relacionada/s"
+    )
 
     compras = compras[compras["ID"] != id_compra].copy()
     ventas = ventas[ventas["ID compra"] != id_compra].copy()
 
-    guardar_datos(compras, ventas)
+    guardar_datos(compras, ventas, historial)
 
     print("\nCompra eliminada correctamente.")
     print("También se eliminaron sus ventas relacionadas, si tenía.")
 
-    return compras, ventas
+    return compras, ventas, historial
 
 def ver_resumen(compras, ventas):
     print("\n--- Resumen general ---")
@@ -503,7 +853,8 @@ def ver_resumen(compras, ventas):
 
 
 def menu():
-    compras, ventas = cargar_datos()
+    compras, ventas, historial = cargar_datos()
+    guardar_datos(compras, ventas, historial)
 
     while True:
         print("1 - Registrar compra")
@@ -511,16 +862,17 @@ def menu():
         print("3 - Ver operaciones abiertas")
         print("4 - Ver resumen de ganancias")
         print("5 - Eliminar compra por ID")
-        print("6 - Actualizar Excel")
-        print("7 - Salir")
+        print("6 - Actualizar Excel, PNL trades cerrados y PNL por moneda")
+        print("7 - Generar/actualizar boxplot general de trades")
+        print("8 - Salir")
 
         opcion = input("Elegí una opción: ")
 
         if opcion == "1":
-            compras, ventas = registrar_compra(compras, ventas)
+            compras, ventas, historial = registrar_compra(compras, ventas, historial)
 
         elif opcion == "2":
-            compras, ventas = registrar_venta(compras, ventas)
+            compras, ventas, historial = registrar_venta(compras, ventas, historial)
 
         elif opcion == "3":
             mostrar_operaciones_abiertas(compras)
@@ -529,13 +881,47 @@ def menu():
             ver_resumen(compras, ventas)
 
         elif opcion == "5":
-            compras, ventas = eliminar_compra_por_id(compras, ventas)
+            compras, ventas, historial = eliminar_compra_por_id(compras, ventas, historial)
 
         elif opcion == "6":
-            guardar_datos(compras, ventas)
-            print("\nExcel actualizado correctamente.")     
+            grafico_moneda, grafico_trades = guardar_datos(compras, ventas, historial)
+            print("\nExcel actualizado correctamente.")
+            print("PNL trades cerrados y PNL por moneda actualizados.")
+
+            if grafico_moneda:
+                print(f"GrÃ¡fico actualizado: {grafico_moneda}")
+            else:
+                print("GrÃ¡fico PNL por moneda no generado: faltan ventas cerradas.")
+
+            if grafico_trades:
+                print(f"GrÃ¡fico actualizado: {grafico_trades}")
+            else:
+                print("GrÃ¡fico trades cerrados no generado: faltan trades cerrados.")
 
         elif opcion == "7":
+            grafico_boxplot, estadisticas = crear_grafico_boxplot_general_trades(compras, ventas)
+
+            if grafico_boxplot:
+                print(f"\nBoxplot general actualizado: {grafico_boxplot}")
+                print(f"Cantidad de trades: {estadisticas['Cantidad trades']}")
+                print(
+                    f"Mejor trade: ID {int(estadisticas['Mejor trade']['ID compra'])} "
+                    f"{estadisticas['Mejor trade']['Nombre']} "
+                    f"PNL {estadisticas['Mejor trade']['PNL realizado']:.2f}"
+                )
+                print(
+                    f"Peor trade: ID {int(estadisticas['Peor trade']['ID compra'])} "
+                    f"{estadisticas['Peor trade']['Nombre']} "
+                    f"PNL {estadisticas['Peor trade']['PNL realizado']:.2f}"
+                )
+                print(f"Promedio: {estadisticas['Promedio']:.2f}")
+                print(f"Mediana: {estadisticas['Mediana']:.2f}")
+                print(f"Q1: {estadisticas['Q1']:.2f}")
+                print(f"Q3: {estadisticas['Q3']:.2f}")
+            else:
+                print("\nBoxplot general no generado: faltan trades cerrados.")
+
+        elif opcion == "8":
             print("\nPrograma finalizado.")
             break
 
