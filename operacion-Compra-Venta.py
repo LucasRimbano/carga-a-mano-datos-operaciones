@@ -7,7 +7,9 @@ import matplotlib.pyplot as plt
 
 
 archivo = "operaciones_crypto2.xlsx"
-TOLERANCIA_CIERRE_CANTIDAD = 0.01
+# Las cantidades de BTC suelen ser mucho menores que 0.01. Una tolerancia de
+# un centésimo cerraba por error posiciones de BTC después de una venta parcial.
+TOLERANCIA_CIERRE_CANTIDAD = 1e-12
 
 columnas_compras = [
     "ID",
@@ -520,6 +522,26 @@ def guardar_datos(compras, ventas, historial=None):
         resumen_por_moneda.to_excel(writer, sheet_name="Resumen por moneda", index=False)
         resumen_trades_cerrados.to_excel(writer, sheet_name="Resumen trades cerrados", index=False)
         historial.to_excel(writer, sheet_name="Historial", index=False)
+
+        # Excel suele mostrar los números pequeños con solo dos decimales. La
+        # cifra real no se pierde, pero una compra de BTC parece ser 0.00.
+        # Mostramos ocho decimales en todas las columnas que contienen crypto.
+        columnas_cantidad = {
+            "Cantidad comprada",
+            "Cantidad vendida total",
+            "Cantidad restante",
+            "Cantidad vendida",
+            "Cantidad",
+        }
+        for hoja in writer.book.worksheets:
+            encabezados = {
+                celda.value: celda.column
+                for celda in hoja[1]
+                if celda.value in columnas_cantidad
+            }
+            for columna in encabezados.values():
+                for fila in range(2, hoja.max_row + 1):
+                    hoja.cell(fila, columna).number_format = "0.00000000"
 
     return grafico_pnl_por_moneda, grafico_trades_cerrados
 
