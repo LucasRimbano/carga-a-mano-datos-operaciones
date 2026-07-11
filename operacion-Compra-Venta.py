@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import math
 from datetime import datetime
 import matplotlib.pyplot as plt
 
@@ -465,11 +466,22 @@ def guardar_datos(compras, ventas, historial=None):
     if not operaciones_cerradas.empty and not ventas.empty:
         ventas_para_cerradas = ventas[[
             "ID compra",
+            "Fecha venta",
             "Dólares vendidos",
             "Precio venta",
             "Costo proporcional",
             "PNL realizado"
         ]].copy()
+
+        fechas_venta = pd.to_datetime(
+            ventas_para_cerradas["Fecha venta"],
+            dayfirst=True,
+            errors="coerce"
+        )
+        ventas_para_cerradas["Fecha de cierre"] = fechas_venta.groupby(
+            ventas_para_cerradas["ID compra"]
+        ).transform("max").dt.strftime("%d-%m-%Y")
+        ventas_para_cerradas = ventas_para_cerradas.drop(columns=["Fecha venta"])
 
         operaciones_cerradas = operaciones_cerradas.merge(
             ventas_para_cerradas,
@@ -482,6 +494,7 @@ def guardar_datos(compras, ventas, historial=None):
             "ID",
             "Nombre",
             "Fecha de compra",
+            "Fecha de cierre",
             "Dólares comprados",
             "Dólares vendidos",
             "Precio de compra",
@@ -663,7 +676,16 @@ def registrar_venta(compras, ventas, historial):
 
     elif tipo_venta == "2":
         porcentaje = pedir_numero("Porcentaje a vender: ")
-        cantidad_vendida = cantidad_restante * porcentaje / 100
+
+        if porcentaje <= 0 or porcentaje > 100:
+            print("\nError: el porcentaje debe ser mayor que 0 y menor o igual a 100.")
+            return compras, ventas, historial
+
+        # Para el 100 % usamos el saldo exacto y evitamos decimales extra de float.
+        if porcentaje == 100:
+            cantidad_vendida = cantidad_restante
+        else:
+            cantidad_vendida = cantidad_restante * porcentaje / 100
         print(f"Cantidad calculada a vender: {cantidad_vendida}")
 
     else:
@@ -672,9 +694,21 @@ def registrar_venta(compras, ventas, historial):
 
     precio_venta = pedir_numero("Precio de venta: ")
 
-    if cantidad_vendida > cantidad_restante:
+    if cantidad_vendida <= 0:
+        print("\nError: la cantidad a vender debe ser mayor que 0.")
+        return compras, ventas, historial
+
+    if cantidad_vendida > cantidad_restante and not math.isclose(
+        cantidad_vendida,
+        cantidad_restante,
+        rel_tol=1e-12,
+        abs_tol=1e-15
+    ):
         print("\nError: no podés vender más de lo que tenés disponible.")
         return compras, ventas, historial
+
+    # Corrige únicamente excesos microscópicos provocados por punto flotante.
+    cantidad_vendida = min(cantidad_vendida, cantidad_restante)
 
     dolares_vendidos = cantidad_vendida * precio_venta
 
