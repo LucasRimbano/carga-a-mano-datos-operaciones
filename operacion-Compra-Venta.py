@@ -523,9 +523,9 @@ def guardar_datos(compras, ventas, historial=None):
         resumen_trades_cerrados.to_excel(writer, sheet_name="Resumen trades cerrados", index=False)
         historial.to_excel(writer, sheet_name="Historial", index=False)
 
-        # Excel suele mostrar los números pequeños con solo dos decimales. La
-        # cifra real no se pierde, pero una compra de BTC parece ser 0.00.
-        # Mostramos ocho decimales en todas las columnas que contienen crypto.
+        # Algunos visores fuerzan dos decimales incluso usando el formato
+        # General. Guardamos las cantidades como texto para que 0.00084751 no
+        # se vea como 0.00. Al cargar el archivo se convierten otra vez a float.
         columnas_cantidad = {
             "Cantidad comprada",
             "Cantidad vendida total",
@@ -541,7 +541,10 @@ def guardar_datos(compras, ventas, historial=None):
             }
             for columna in encabezados.values():
                 for fila in range(2, hoja.max_row + 1):
-                    hoja.cell(fila, columna).number_format = "0.00000000"
+                    celda = hoja.cell(fila, columna)
+                    if isinstance(celda.value, (int, float)) and not isinstance(celda.value, bool):
+                        celda.value = f"{celda.value:.8f}".rstrip("0").rstrip(".")
+                    celda.number_format = "@"
 
     return grafico_pnl_por_moneda, grafico_trades_cerrados
 
