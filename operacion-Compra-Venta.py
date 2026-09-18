@@ -267,6 +267,78 @@ def crear_grafico_pnl_por_moneda(compras, ventas):
     return nombre_grafico
 
 
+def crear_grafico_ganancias_perdidas_totales(ventas):
+    if ventas.empty:
+        return None
+
+    ganancias = ventas.loc[
+        ventas["PNL realizado"] > 0,
+        "PNL realizado"
+    ].sum()
+
+    perdidas = abs(
+        ventas.loc[
+            ventas["PNL realizado"] < 0,
+            "PNL realizado"
+        ].sum()
+    )
+
+    resultado_total = ganancias - perdidas
+
+    nombres = ["Ganancias", "Pérdidas", "Total"]
+    valores = [ganancias, -perdidas, resultado_total]
+
+    colores = ["green", "red", "blue"]
+
+    fig, (ax_grafico, ax_texto) = plt.subplots(
+        1,
+        2,
+        figsize=(11, 5),
+        gridspec_kw={"width_ratios": [3, 1]}
+    )
+
+    ax_grafico.bar(nombres, valores, color=colores)
+    ax_grafico.axhline(0, color="black")
+    ax_grafico.set_title("Ganancias y pérdidas totales")
+    ax_grafico.set_ylabel("USD")
+
+    for i, valor in enumerate(valores):
+        ax_grafico.text(
+            i,
+            valor,
+            f"${valor:.2f}",
+            ha="center",
+            va="bottom" if valor >= 0 else "top"
+        )
+
+    ax_texto.axis("off")
+
+    resumen = (
+        f"Ganancias:\n"
+        f"${ganancias:.2f}\n\n"
+        f"Pérdidas:\n"
+        f"${perdidas:.2f}\n\n"
+        f"Ganancia / Pérdida total:\n"
+        f"${resultado_total:.2f}"
+    )
+
+    ax_texto.text(
+        0.05,
+        0.8,
+        resumen,
+        fontsize=12,
+        va="top"
+    )
+
+    plt.tight_layout()
+
+    nombre_grafico = "grafico_ganancias_perdidas_totales.png"
+    plt.savefig(nombre_grafico)
+    plt.close()
+
+    return nombre_grafico
+
+
 def crear_resumen_trades_cerrados(compras, ventas):
     columnas = [
         "ID compra",
@@ -944,18 +1016,28 @@ def menu():
 
         elif opcion == "6":
             grafico_moneda, grafico_trades = guardar_datos(compras, ventas, historial)
+
+            grafico_total = crear_grafico_ganancias_perdidas_totales(ventas)
+
             print("\nExcel actualizado correctamente.")
             print("PNL trades cerrados y PNL por moneda actualizados.")
 
             if grafico_moneda:
-                print(f"GrÃ¡fico actualizado: {grafico_moneda}")
+                print(f"Grafico actualizado: {grafico_moneda}")
             else:
-                print("GrÃ¡fico PNL por moneda no generado: faltan ventas cerradas.")
+                print("Grafico PNL por moneda no generado: faltan ventas cerradas.")
 
             if grafico_trades:
-                print(f"GrÃ¡fico actualizado: {grafico_trades}")
+                print(f"Grafico actualizado: {grafico_trades}")
             else:
-                print("GrÃ¡fico trades cerrados no generado: faltan trades cerrados.")
+                print("Grafico trades cerrados no generado: faltan trades cerrados.")
+
+            if grafico_total:
+                print(f"Grafico ganancias/perdidas actualizado: {grafico_total}")
+            else:
+                print("Grafico ganancias/perdidas no generado: faltan ventas.")    
+
+                
 
         elif opcion == "7":
             grafico_boxplot, estadisticas = crear_grafico_boxplot_general_trades(compras, ventas)
